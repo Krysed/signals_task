@@ -1,3 +1,8 @@
+/*
+Proszę o przygotowanie aplikacji w której obliczane wyniki realizowane są przez osobne procesy (każdy element w macierzy wynikowej obliczany w osobnym procesie).
+Proces Macierzysty pełni rolę zarządcy i rozdziela zadania,na koniec wyświetla wyliczoną macierz.
+W komunikacji proszę wykorzystać 2 sposoby komunikacji. Przez pamięć współdzieloną i inny sposób opisany podczas zajęć.
+*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <csignal>
@@ -28,11 +33,12 @@ std::vector<std::vector<int>> matrix_multiplication(const std::vector<std::vecto
 
 std::vector<std::vector<int>> signal_based_logic();
 std::vector<std::vector<int>> signal_based_logic(const std::vector<std::vector<int>>& matrixA, const std::vector<std::vector<int>>& matrixB);
-std::vector<std::vector<int>> file_based_logic();
-std::vector<std::vector<int>> file_based_logic(const std::vector<std::vector<int>>& matrixA, const std::vector<std::vector<int>>& matrixB);
+std::vector<std::vector<int>> pipe_based_logic();
+std::vector<std::vector<int>> pipe_based_logic(const std::vector<std::vector<int>>& matrixA, const std::vector<std::vector<int>>& matrixB);
 
 void calculate_element(int row, int col, const std::vector<std::vector<int>>& matrixA, const std::vector<std::vector<int>>& matrixB, int* result);
 void calculate_and_write_to_file(int row, int col, const std::vector<std::vector<int>>& matrixA, const std::vector<std::vector<int>>& matrixB);
+void calculate_and_pipe(int row, int col, const std::vector<std::vector<int>>& matrixA, const std::vector<std::vector<int>>& matrixB, int write_fd);
 
 void print_matrix(const std::vector<std::vector<int>> matrix);
 void are_equal_output(bool result);
@@ -76,7 +82,7 @@ void use_menu()
     while(true)
     {
         std::vector<std::vector<int>> resultMatrix;
-        std::cout << "\n1. Signals,\n2. Files,\n3. Test cases,\n4. Exit.: ";
+        std::cout << "\n1. Shared-memory,\n2. Pipes,\n3. Test cases,\n4. Exit.: ";
         std::cin >> decision;
         switch (decision)
         {
@@ -86,8 +92,8 @@ void use_menu()
             print_matrix(resultMatrix);
             break;
         case 2:
-            resultMatrix = file_based_logic();
-            std::cout << "\nResult Matrix (File-based):\n";
+            resultMatrix = pipe_based_logic();
+            std::cout << "\nResult Matrix (Pipe-based):\n";
             print_matrix(resultMatrix);
             break;
         case 3:
@@ -138,7 +144,6 @@ void calculate_element(int row, int col, const std::vector<std::vector<int>>& ma
     *result = value;
     kill(getppid(), SIGUSR1);
     // printf("Child process %d finished.\n", getpid());
-
     exit(0);
 }
 
@@ -219,12 +224,10 @@ std::vector<std::vector<int>> signal_based_logic(const std::vector<std::vector<i
     int colsA = matrixA[0].size();
     int rowsB = matrixB.size();
     int colsB = matrixB[0].size();
-
     if (colsA != rowsB) {
         std::cout << "Matrix dimensions do not match for multiplication.\n";
         return {};
     }
-
     signal(SIGUSR1, signal_handler);
 
     int* result = (int*)mmap(nullptr, rowsA * colsB * sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
@@ -234,9 +237,7 @@ std::vector<std::vector<int>> signal_based_logic(const std::vector<std::vector<i
         printf("mmap failed");
         exit(1);
     }
-
     int active_processes = 0;
-
     for (int row = 0; row < rowsA; ++row) {
         for (int col = 0; col < colsB; ++col) {
             if (active_processes >= MAX_PROCESSES) {
@@ -244,7 +245,6 @@ std::vector<std::vector<int>> signal_based_logic(const std::vector<std::vector<i
                 ready = 0;
                 active_processes--;
             }
-
             pid_t pid = fork();
             if (pid == 0) {
                 // printf("Child process %d started\n", getpid());
@@ -257,12 +257,10 @@ std::vector<std::vector<int>> signal_based_logic(const std::vector<std::vector<i
             }
         }
     }
-
     while (active_processes > 0) {
         waitpid(-1, nullptr, 0);
         active_processes--;
     }
-
     std::vector<std::vector<int>> resultMatrix(rowsA, std::vector<int>(colsB, 0));
     for (int i = 0; i < rowsA; ++i) {
         for (int j = 0; j < colsB; ++j) {
@@ -272,116 +270,110 @@ std::vector<std::vector<int>> signal_based_logic(const std::vector<std::vector<i
     return resultMatrix;
 }
 
-std::vector<std::vector<int>> file_based_logic() {
+// Pipe-based logic
+void calculate_and_pipe(int row, int col, const std::vector<std::vector<int>>& matrixA, const std::vector<std::vector<int>>& matrixB, int pipe_fd) {
+    int value = 0;
+    for (int k = 0; k < matrixA[0].size(); ++k) {
+        value += matrixA[row][k] * matrixB[k][col];
+    }
+    write(pipe_fd, &value, sizeof(int));
+}
+std::vector<std::vector<int>> pipe_based_logic(const std::vector<std::vector<int>>& matrixA, const std::vector<std::vector<int>>& matrixB) {
+    int rowsA = matrixA.size();
+    int colsB = matrixB[0].size();
+    int active_processes = 0;
+
+    std::vector<std::vector<int>> result(rowsA, std::vector<int>(colsB));
+
+    for (int row = 0; row < rowsA; ++row) {
+        for (int col = 0; col < colsB; ++col) {
+            while (active_processes >= MAX_PROCESSES) {
+                wait(nullptr);
+                active_processes--;
+            }
+            int pipe_fds[2];
+            if (pipe(pipe_fds) == -1) {
+                perror("Pipe failed");
+                exit(1);
+            }
+            pid_t pid = fork();
+            if (pid == 0) {
+                close(pipe_fds[0]);
+                calculate_and_pipe(row, col, matrixA, matrixB, pipe_fds[1]);
+                close(pipe_fds[1]);
+                exit(0);
+            } else if (pid > 0) {
+                // Parent process
+                close(pipe_fds[1]); // Close write end
+                int value;
+                read(pipe_fds[0], &value, sizeof(int));
+                result[row][col] = value;
+                close(pipe_fds[0]); // Close read end
+                active_processes++;
+            } else {
+                perror("Fork failed");
+                exit(1);
+            }
+        }
+    }
+    // Wait for remaining processes
+    while (active_processes > 0) {
+        wait(nullptr);
+        active_processes--;
+    }
+
+    return result;
+}
+
+std::vector<std::vector<int>> pipe_based_logic() {
     int rowsA = rand() % MAX_ROW_COL + MIN_ROW_COL;
     int colsA = rand() % MAX_ROW_COL + MIN_ROW_COL;
     int colsB = rand() % MAX_ROW_COL + MIN_ROW_COL;
-
     auto [matrixA, matrixB] = generate_matrices(rowsA, colsA, colsB);
-
-    std::cout << "Matrix A:\n";
-    print_matrix(matrixA);
-    std::cout << "\nMatrix B:\n";
-    print_matrix(matrixB);
-
     int active_processes = 0;
+    std::vector<std::vector<int>> result(rowsA, std::vector<int>(colsB));
 
     for (int row = 0; row < rowsA; ++row) {
         for (int col = 0; col < colsB; ++col) {
-            if (active_processes >= MAX_PROCESSES) {
+            while (active_processes >= MAX_PROCESSES) {
                 wait(nullptr);
                 active_processes--;
             }
 
-            pid_t pid = fork();
-            if (pid == 0) {
-                calculate_and_write_to_file(row, col, matrixA, matrixB);
-            } else if (pid > 0) {
-                active_processes++;
-            } else {
-                std::cout << "Fork failed";
+            int pipe_fds[2];
+            if (pipe(pipe_fds) == -1) {
+                perror("Pipe failed");
                 exit(1);
             }
-        }
-    }
-
-    while (active_processes > 0) {
-        wait(nullptr);
-        active_processes--;
-    }
-
-    std::vector<std::vector<int>> resultMatrix(rowsA, std::vector<int>(colsB, 0));
-    for (int row = 0; row < rowsA; ++row) {
-        for (int col = 0; col < colsB; ++col) {
-            std::ifstream infile("result_" + std::to_string(row) + "_" + std::to_string(col) + ".txt");
-            if (infile.is_open()) {
-                infile >> resultMatrix[row][col];
-                infile.close();
-                std::remove(("result_" + std::to_string(row) + "_" + std::to_string(col) + ".txt").c_str());
-            }
-        }
-    }
-    return resultMatrix;
-}
-
-std::vector<std::vector<int>> file_based_logic(const std::vector<std::vector<int>>& matrixA, const std::vector<std::vector<int>>& matrixB) {
-    int rowsA = matrixA.size();
-    int colsA = matrixA[0].size();
-    int rowsB = matrixB.size();
-    int colsB = matrixB[0].size();
-
-    if (colsA != rowsB) {
-        std::cout << "Matrix dimensions do not match for multiplication.\n";
-        return {};
-    }
-
-    int active_processes = 0;
-
-    for (int row = 0; row < rowsA; ++row) {
-        for (int col = 0; col < colsB; ++col) {
-            if (active_processes >= MAX_PROCESSES) {
-                wait(nullptr);
-                active_processes--;
-            }
 
             pid_t pid = fork();
             if (pid == 0) {
-                std::ofstream outfile("result_" + std::to_string(row) + "_" + std::to_string(col) + ".txt");
-                int value = 0;
-                for (int k = 0; k < matrixA[0].size(); ++k) {
-                    value += matrixA[row][k] * matrixB[k][col];
-                }
-                outfile << value;
-                outfile.close();
+                // Child process
+                close(pipe_fds[0]); // Close read end
+                calculate_and_pipe(row, col, matrixA, matrixB, pipe_fds[1]);
+                close(pipe_fds[1]); // Close write end
                 exit(0);
             } else if (pid > 0) {
+                // Parent process
+                close(pipe_fds[1]); // Close write end
+                int value;
+                read(pipe_fds[0], &value, sizeof(int));
+                result[row][col] = value;
+                close(pipe_fds[0]); // Close read end
                 active_processes++;
             } else {
-                std::cout << "Fork failed\n";
+                perror("Fork failed");
                 exit(1);
             }
         }
     }
-
+    // Wait for remaining processes
     while (active_processes > 0) {
         wait(nullptr);
         active_processes--;
     }
 
-    std::vector<std::vector<int>> resultMatrix(rowsA, std::vector<int>(colsB, 0));
-    for (int row = 0; row < rowsA; ++row) {
-        for (int col = 0; col < colsB; ++col) {
-            std::ifstream infile("result_" + std::to_string(row) + "_" + std::to_string(col) + ".txt");
-            if (infile.is_open()) {
-                infile >> resultMatrix[row][col];
-                infile.close();
-                std::remove(("result_" + std::to_string(row) + "_" + std::to_string(col) + ".txt").c_str());
-            } else {
-                std::cout << "Error reading file for position (" << row << ", " << col << ")\n";
-            }
-        }
-    }
-    return resultMatrix;
+    return result;
 }
 
 void are_equal_output(bool result)
@@ -409,7 +401,7 @@ void test_cases()
     are_equal_output(compare_matrices(resultMatrix, EXPECTED_RESULT_2x2));
 
     std::cout << "\nMultiplying using file based parallel processing...\n";
-    resultMatrix = file_based_logic(TEST_MATRIX_A_2x2, TEST_MATRIX_B_2x2);
+    resultMatrix = pipe_based_logic(TEST_MATRIX_A_2x2, TEST_MATRIX_B_2x2);
     print_matrix(resultMatrix);
     are_equal_output(compare_matrices(resultMatrix, EXPECTED_RESULT_2x2));
 
@@ -427,8 +419,8 @@ void test_cases()
     print_matrix(resultMatrix);
     are_equal_output(compare_matrices(resultMatrix, EXPECTED_RESULT_3x3));
 
-    std::cout << "\nMultiplying using file based parallel processing...\n";
-    resultMatrix = file_based_logic(TEST_MATRIX_A_3x2, TEST_MATRIX_B_2x3);
+    std::cout << "\nMultiplying using pipe based parallel processing...\n";
+    resultMatrix = pipe_based_logic(TEST_MATRIX_A_3x2, TEST_MATRIX_B_2x3);
     print_matrix(resultMatrix);
     are_equal_output(compare_matrices(resultMatrix, EXPECTED_RESULT_3x3));
 }
