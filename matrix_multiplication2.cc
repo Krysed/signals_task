@@ -31,8 +31,8 @@ std::vector<std::vector<int>> generate_matrix_values(int rows, int cols);
 std::pair<std::vector<std::vector<int>>, std::vector<std::vector<int>>> generate_matrices(int rowsA, int colsA, int colsB);
 std::vector<std::vector<int>> matrix_multiplication(const std::vector<std::vector<int>> matrixA, const std::vector<std::vector<int>> matrixB);
 
-std::vector<std::vector<int>> signal_based_logic();
-std::vector<std::vector<int>> signal_based_logic(const std::vector<std::vector<int>>& matrixA, const std::vector<std::vector<int>>& matrixB);
+std::vector<std::vector<int>> mmap_based_logic();
+std::vector<std::vector<int>> mmap_based_logic(const std::vector<std::vector<int>>& matrixA, const std::vector<std::vector<int>>& matrixB);
 std::vector<std::vector<int>> pipe_based_logic();
 std::vector<std::vector<int>> pipe_based_logic(const std::vector<std::vector<int>>& matrixA, const std::vector<std::vector<int>>& matrixB);
 
@@ -87,7 +87,7 @@ void use_menu()
         switch (decision)
         {
         case 1:
-            resultMatrix = signal_based_logic();
+            resultMatrix = mmap_based_logic();
             std::cout << "\nResult Matrix (Signal-based):\n";
             print_matrix(resultMatrix);
             break;
@@ -158,7 +158,7 @@ void calculate_and_write_to_file(int row, int col, const std::vector<std::vector
     exit(0);
 }
 
-std::vector<std::vector<int>> signal_based_logic() {
+std::vector<std::vector<int>> mmap_based_logic() {
     int rowsA = rand() % MAX_ROW_COL + MIN_ROW_COL;
     int colsA = rand() % MAX_ROW_COL + MIN_ROW_COL;
     int colsB = rand() % MAX_ROW_COL + MIN_ROW_COL;
@@ -219,7 +219,7 @@ std::vector<std::vector<int>> signal_based_logic() {
     return resultMatrix;
 }
 
-std::vector<std::vector<int>> signal_based_logic(const std::vector<std::vector<int>>& matrixA, const std::vector<std::vector<int>>& matrixB) {
+std::vector<std::vector<int>> mmap_based_logic(const std::vector<std::vector<int>>& matrixA, const std::vector<std::vector<int>>& matrixB) {
     int rowsA = matrixA.size();
     int colsA = matrixA[0].size();
     int rowsB = matrixB.size();
@@ -396,7 +396,7 @@ void test_cases()
     print_matrix(TEST_MATRIX_B_2x2);
 
     std::cout << "\nMultiplying using signal based parallel processing...\n";
-    resultMatrix = signal_based_logic(TEST_MATRIX_A_2x2, TEST_MATRIX_B_2x2);
+    resultMatrix = mmap_based_logic(TEST_MATRIX_A_2x2, TEST_MATRIX_B_2x2);
     print_matrix(resultMatrix);
     are_equal_output(compare_matrices(resultMatrix, EXPECTED_RESULT_2x2));
 
@@ -415,7 +415,7 @@ void test_cases()
     print_matrix(TEST_MATRIX_B_2x3);
 
     std::cout << "\nMultiplying using signal based parallel processing...\n";
-    resultMatrix = signal_based_logic(TEST_MATRIX_A_3x2, TEST_MATRIX_B_2x3);
+    resultMatrix = mmap_based_logic(TEST_MATRIX_A_3x2, TEST_MATRIX_B_2x3);
     print_matrix(resultMatrix);
     are_equal_output(compare_matrices(resultMatrix, EXPECTED_RESULT_3x3));
 
